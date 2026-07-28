@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+<title>Nexia</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0a0a0a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Nexia" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="icon" href="icon-192.png" />
+<script>
+  var pendingErrors = [];
+  function showFatalError(msg) {
+    if (!document.body) {
+      pendingErrors.push(msg);
+      return;
+    }
+    var el = document.getElementById("fatal-error");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "fatal-error";
+      el.style.cssText = "position:fixed;inset:0;background:#1a0505;color:#ffb4b4;padding:16px;font-family:monospace;font-size:13px;white-space:pre-wrap;overflow:auto;z-index:99999;";
+      document.documentElement.appendChild(el);
+    }
+    el.textContent += (el.textContent ? "\n\n" : "") + msg;
+  }
+  window.addEventListener("error", function (e) {
+    showFatalError("Erro: " + (e.message || "desconhecido") + (e.filename ? "\n" + e.filename + ":" + e.lineno + ":" + e.colno : ""));
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    showFatalError("Promise rejeitada: " + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
+  });
+  document.addEventListener("DOMContentLoaded", function () {
+    pendingErrors.forEach(showFatalError);
+    pendingErrors = [];
+  });
+</script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; }
+  html, body, #root { height: 100dvh; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  button { font-family: inherit; }
+  textarea, input { font-family: inherit; }
+  .shrink-0 { flex-shrink: 0; }
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spin { animation: spin 1s linear infinite; }
+  .bounce { animation: bounce 1s infinite; }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes bounce { 0%,80%,100%{transform: translateY(0);} 40%{transform: translateY(-4px);} }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("sw.js").catch(function () {});
+    });
+  }
+</script>
+<script type="text/plain" id="app-source">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const SYSTEM_PROMPT = `Você é o Nexia. Responda em português do Brasil, informal e curto. Seja direto, sem enrolação.`;
+
+// Exemplos fixos que ensinam o "jeito de falar" pro modelo pequeno — funciona melhor
+// que só instrução em texto, porque ele copia o padrão em vez de ter que entender a regra.
+const FEW_SHOT_EXAMPLES = [
+  { role: "user", content: "Oi, tudo bem?" },
+  { role: "assistant", content: "Fala! Tudo certo por aqui, e você? Se precisar de alguma coisa é só falar." },
+  { role: "user", content: "Qual a capital do Brasil?" },
+  { role: "assistant", content: "A capital do Brasil é Brasília." },
+];
+
+const DISPLAY_FONT = "'Space Grotesk', sans-serif";
+const MONO_FONT = "'JetBrains Mono', monospace";
+const AMBER = "#fbbf24";
+const AMBER_DEEP = "#d97706";
+const EMERALD = "#34d399";
+const RED = "#f87171";
+
+const EMOJI = {
+  menu: "☰", plus: "+", send: "➤", chevronDown: "⌄", download: "⬇",
+  check: "✓", x: "✕", copy: "⧉", key: "🔑", camera: "📷", image: "🖼",
+  folderPlus: "📁", loader: "◌", sparkles: "✨", messageSquarePlus: "💬", folderClosed: "📂",
+};
+
+function Icon({ name, size = 16, color, spin: doSpin, style = {}, ...rest }) {
+  return (
+    <span
+      className={doSpin ? "spin" : ""}
+      style={{ fontSize: size, color, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", ...style }}
+      {...rest}
+    >
+      {EMOJI[name] || "•"}
+    </span>
+  );
+}
+
+function uid() { return Math.random().toString(36).slice(2, 10); }
+
+function useTheme(isDark) {
+  return isDark
+    ? { bg: "#0a0d12", panel: "#10141b", bubbleAssistant: "rgba(255,255,255,0.06)", bubbleUser: AMBER, bubbleUserText: "#171008",
+        text: "rgba(255,255,255,0.92)", textMuted: "rgba(255,255,255,0.5)", textFaint: "rgba(255,255,255,0.32)",
+        border: "rgba(255,255,255,0.1)", hover: "rgba(255,255,255,0.08)", inputBg: "rgba(255,255,255,0.05)",
+        code: "#0d1117", codeText: "#c9f2d8" }
+    : { bg: "#faf9f7", panel: "#ffffff", bubbleAssistant: "rgba(0,0,0,0.045)", bubbleUser: "#171310", bubbleUserText: "#ffffff",
+        text: "rgba(0,0,0,0.87)", textMuted: "rgba(0,0,0,0.5)", textFaint: "rgba(0,0,0,0.32)",
+        border: "rgba(0,0,0,0.1)", hover: "rgba(0,0,0,0.05)", inputBg: "rgba(0,0,0,0.035)",
+        code: "#f6f7f9", codeText: "#1e293b" };
+}
+
+function copyText(text) {
+  return new Promise((resolve, reject) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(resolve).catch(() => fallbackCopy(text, resolve, reject));
+    } else {
+      fallbackCopy(text, resolve, reject);
+    }
+  });
+}
+function fallbackCopy(text, resolve, reject) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    ok ? resolve() : reject(new Error("copy failed"));
+  } catch (e) { reject(e); }
+}
+
+function parseAssistant(text) {
+  const folderRegex = /%%%FOLDER%%%([\s\S]*?)%%%ENDFOLDER%%%/;
+  const folderMatch = text.match(folderRegex);
+  let folderData = null;
+  let rest = text;
+  if (folderMatch) {
+    try { folderData = JSON.parse(folderMatch[1].trim()); } catch (e) { folderData = null; }
+    rest = text.replace(folderRegex, "").trim();
+  }
+  const codeRegex = /```(\w*)\n?([\s\S]*?)```/g;
+  const segments = [];
+  let lastIndex = 0, m;
+  while ((m = codeRegex.exec(rest)) !== null) {
+    if (m.index > lastIndex) segments.push({ type: "text", content: rest.slice(lastIndex, m.index) });
+    segments.push({ type: "code", lang: m[1], content: m[2] });
+    lastIndex = codeRegex.lastIndex;
+  }
+  if (lastIndex < rest.length) segments.push({ type: "text", content: rest.slice(lastIndex) });
+  return { segments, folderData };
+}
+
+function CopyIconButton({ text, theme, sourceRef }) {
+  const [state, setState] = useState("idle");
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        copyText(text).then(() => { setState("copied"); setTimeout(() => setState("idle"), 1400); })
+          .catch(() => {
+            if (sourceRef?.current) {
+              try {
+                const range = document.createRange();
+                range.selectNodeContents(sourceRef.current);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+              } catch {}
+            }
+            setState("manual");
+            setTimeout(() => setState("idle"), 2600);
+          });
+      }}
+      style={{ color: state === "copied" ? EMERALD : state === "manual" ? AMBER_DEEP : theme.textMuted, background: "transparent", border: "none", cursor: "pointer" }}
+      className="shrink-0"
+      title={state === "manual" ? "Selecionado — copia pelo teclado ou toque e segure" : "Copiar"}
+    >
+      <Icon name={state === "copied" ? "check" : "copy"} size={14} />
+    </button>
+  );
+}
+
+function CodeBlock({ lang, content, theme }) {
+  const codeRef = useRef(null);
+  return (
+    <div style={{ margin: "8px 0", borderRadius: 12, overflow: "hidden", border: `1px solid ${theme.border}`, background: theme.code }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 12px", background: theme.hover, color: theme.textMuted, fontFamily: MONO_FONT, fontSize: 11 }}>
+        <span>{lang || "texto"}</span>
+        <CopyIconButton text={content} theme={theme} sourceRef={codeRef} />
+      </div>
+      <pre style={{ padding: "10px 12px", overflowX: "auto", color: theme.codeText, fontFamily: MONO_FONT, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+        <code ref={codeRef}>{content}</code>
+      </pre>
+    </div>
+  );
+}
+
+function FolderCard({ data, theme }) {
+  const [ready, setReady] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [dlState, setDlState] = useState("idle");
+  const [errMsg, setErrMsg] = useState("");
+  const [fileState, setFileState] = useState({});
+  const dirHandleRef = useRef(null);
+
+  useEffect(() => { const t = setTimeout(() => setReady(true), 900); return () => clearTimeout(t); }, []);
+
+  const files = Array.isArray(data?.files) ? data.files : [];
+  const name = data?.name || "projeto";
+  const supportsRealInstall = typeof window !== "undefined" && "showDirectoryPicker" in window;
+
+  async function writeFileReal(folderHandle, file) {
+    const fh = await folderHandle.getFileHandle(file.name || "arquivo.txt", { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(file.content ?? "");
+    await writable.close();
+  }
+  function downloadFileBlob(file, fallbackName) {
+    const blob = new Blob([file.content ?? ""], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name || fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  const handleInstallAll = async (e) => {
+    e.stopPropagation();
+    if (dlState === "loading") return;
+    if (!files.length) {
+      setErrMsg("essa pasta tá vazia, não tem o que instalar.");
+      setDlState("error");
+      setTimeout(() => setDlState("idle"), 2800);
+      return;
+    }
+    setDlState("loading");
+    try {
+      if (supportsRealInstall) {
+        let root = dirHandleRef.current;
+        if (!root) { root = await window.showDirectoryPicker({ mode: "readwrite" }); dirHandleRef.current = root; }
+        const sub = await root.getDirectoryHandle(name, { create: true });
+        for (const f of files) await writeFileReal(sub, f);
+      } else {
+        for (let i = 0; i < files.length; i++) {
+          if (i > 0) await new Promise((res) => setTimeout(res, 280));
+          downloadFileBlob(files[i], `arquivo-${i + 1}.txt`);
+        }
+      }
+      setDlState("success");
+      setTimeout(() => setDlState("idle"), 1800);
+    } catch (err) {
+      if (err?.name === "AbortError") { setDlState("idle"); return; }
+      setErrMsg(err.message || "não consegui instalar a pasta.");
+      setDlState("error");
+      setTimeout(() => setDlState("idle"), 2800);
+    }
+  };
+
+  const handleInstallOne = async (f) => {
+    setFileState((s) => ({ ...s, [f.name]: "loading" }));
+    try {
+      if (supportsRealInstall) {
+        let root = dirHandleRef.current;
+        if (!root) { root = await window.showDirectoryPicker({ mode: "readwrite" }); dirHandleRef.current = root; }
+        const sub = await root.getDirectoryHandle(name, { create: true });
+        await writeFileReal(sub, f);
+      } else {
+        downloadFileBlob(f, "arquivo.txt");
+      }
+      setFileState((s) => ({ ...s, [f.name]: "success" }));
+      setTimeout(() => setFileState((s) => ({ ...s, [f.name]: undefined })), 1600);
+    } catch (err) {
+      if (err?.name === "AbortError") { setFileState((s) => ({ ...s, [f.name]: undefined })); return; }
+      setFileState((s) => ({ ...s, [f.name]: "error" }));
+      setTimeout(() => setFileState((s) => ({ ...s, [f.name]: undefined })), 2200);
+    }
+  };
+
+  if (!ready) {
+    return (
+      <div style={{ marginTop: 8, display: "inline-flex", alignItems: "center", gap: 8, color: AMBER_DEEP, fontFamily: MONO_FONT, fontSize: 13 }}>
+        <Icon name="loader" spin size={14} />
+        <span className="pulse">gerando pasta {name}...</span>
+      </div>
+    );
+  }
+
+  const dlBg = dlState === "success" ? "rgba(52,211,153,0.18)" : dlState === "error" ? "rgba(248,113,113,0.18)" : theme.hover;
+  const dlColor = dlState === "success" ? EMERALD : dlState === "error" ? RED : theme.text;
+
+  return (
+    <div style={{ marginTop: 12, maxWidth: 340, borderRadius: 16, overflow: "hidden", border: `1px solid ${theme.border}`, background: theme.panel }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px" }}>
+        <div className="shrink-0" style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(251,191,36,0.18)", color: AMBER_DEEP }}>
+          <Icon name="folderClosed" size={16} />
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <p className="truncate" style={{ fontFamily: DISPLAY_FONT, fontWeight: 600, fontSize: 14, margin: 0, color: theme.text }}>{name}</p>
+          <p style={{ fontSize: 11, color: theme.textMuted, margin: 0 }}>{files.length} arquivo{files.length === 1 ? "" : "s"} · {supportsRealInstall ? "instala numa pasta real" : "baixa pro Downloads"}</p>
+        </div>
+        <button onClick={handleInstallAll} disabled={dlState === "loading"} style={{ background: dlBg, color: dlColor, border: "none", cursor: "pointer", width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }} className="shrink-0" title={supportsRealInstall ? "Instalar pasta numa pasta real" : "Baixar arquivos"}>
+          {dlState === "loading" && <Icon name="loader" spin size={15} />}
+          {dlState === "success" && <Icon name="check" size={15} />}
+          {dlState === "error" && <Icon name="x" size={15} />}
+          {dlState === "idle" && <Icon name="download" size={15} />}
+        </button>
+        <button onClick={() => setExpanded((v) => !v)} style={{ background: theme.hover, color: theme.text, border: "none", cursor: "pointer", width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", transform: expanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s ease" }} className="shrink-0" title="Ver arquivos">
+          <Icon name="chevronDown" size={15} />
+        </button>
+      </div>
+      {dlState === "error" && <div style={{ padding: "0 12px 8px", marginTop: -6, fontSize: 11, color: RED }}>{errMsg}</div>}
+      <div style={{ overflow: "hidden", transition: "max-height .3s ease", maxHeight: expanded ? files.length * 44 + 12 : 0 }}>
+        <div style={{ padding: 8, borderTop: `1px solid ${theme.border}` }}>
+          {files.map((f, i) => {
+            const st = fileState[f.name];
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4, padding: "4px 8px", borderRadius: 8, fontFamily: MONO_FONT, fontSize: 12, color: theme.text }}>
+                <span className="truncate">{f.name}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }} className="shrink-0">
+                  <CopyIconButton text={f.content ?? ""} theme={theme} />
+                  <button onClick={() => handleInstallOne(f)} style={{ background: "transparent", border: "none", cursor: "pointer", color: st === "success" ? EMERALD : st === "error" ? RED : theme.textMuted }} title={supportsRealInstall ? "Instalar este arquivo" : "Baixar este arquivo"}>
+                    {st === "loading" && <Icon name="loader" spin size={13} />}
+                    {st === "success" && <Icon name="check" size={13} />}
+                    {st === "error" && <Icon name="x" size={13} />}
+                    {!st && <Icon name="download" size={13} />}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ msg, theme }) {
+  const isUser = msg.role === "user";
+  if (isUser) {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 16px" }}>
+        <div style={{ maxWidth: "80%", borderRadius: 16, borderTopRightRadius: 4, padding: "8px 16px", background: theme.bubbleUser, color: theme.bubbleUserText, fontSize: 14.5, lineHeight: 1.5 }}>
+          {msg.attachment?.dataUrl && msg.attachment.type?.startsWith("image") && (
+            <img src={msg.attachment.dataUrl} alt="anexo" style={{ borderRadius: 8, marginBottom: 8, maxHeight: 190, display: "block" }} />
+          )}
+          {msg.attachment?.fileNames && (
+            <div style={{ marginBottom: 8, fontSize: 12, opacity: 0.7, fontFamily: MONO_FONT }}>📁 {msg.attachment.fileNames.join(", ")}</div>
+          )}
+          <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
+        </div>
+      </div>
+    );
+  }
+  const { segments, folderData } = parseAssistant(msg.text || "");
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-start", padding: "0 16px" }}>
+      <div style={{ maxWidth: "85%", borderRadius: 16, borderTopLeftRadius: 4, padding: "12px 16px", background: theme.bubbleAssistant, color: theme.text, fontSize: 14.5, lineHeight: 1.5 }}>
+        {msg.pending && !msg.text ? (
+          <span style={{ display: "inline-flex", gap: 4, alignItems: "center", padding: "4px 0" }}>
+            <span className="bounce" style={{ width: 6, height: 6, borderRadius: 999, background: theme.textMuted, animationDelay: "0ms" }} />
+            <span className="bounce" style={{ width: 6, height: 6, borderRadius: 999, background: theme.textMuted, animationDelay: "120ms" }} />
+            <span className="bounce" style={{ width: 6, height: 6, borderRadius: 999, background: theme.textMuted, animationDelay: "240ms" }} />
+          </span>
+        ) : (
+          <>
+            {segments.map((seg, i) => seg.type === "code"
+              ? <CodeBlock key={i} lang={seg.lang} content={seg.content} theme={theme} />
+              : (seg.content.trim() && <p key={i} style={{ whiteSpace: "pre-wrap", margin: "0 0 4px 0" }}>{seg.content.trim()}</p>))}
+            {folderData && <FolderCard data={folderData} theme={theme} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [isDark, setIsDark] = useState(true);
+  const theme = useTheme(isDark);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversations, setConversations] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [apiKeyModal, setApiKeyModal] = useState(false);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [pcMode, setPcMode] = useState(() => {
+    try { return localStorage.getItem("nexia-pc-mode") === "1"; } catch { return false; }
+  });
+  const [pendingAttachment, setPendingAttachment] = useState(null);
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
+  const [keyCopied, setKeyCopied] = useState("idle");
+  const [booted, setBooted] = useState(false);
+  const [modelStatus, setModelStatus] = useState("loading");
+  const [modelProgress, setModelProgress] = useState(0);
+  const [modelErrorDetail, setModelErrorDetail] = useState("");
+  const workerRef = useRef(null);
+  const pendingGenRef = useRef(new Map());
+  const currentRequestIdRef = useRef(null);
+  const scrollRef = useRef(null);
+  const apiKeyInputRef = useRef(null);
+  const cameraRef = useRef(null);
+  const photoRef = useRef(null);
+  const folderRef = useRef(null);
+
+  const active = conversations.find((c) => c.id === activeId);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    setIsDark(mq.matches);
+    const handler = (e) => setIsDark(e.matches);
+    mq.addEventListener?.("change", handler);
+    return () => mq.removeEventListener?.("change", handler);
+  }, []);
+
+  const loadModel = useCallback(() => {
+    let cancelled = false;
+    setModelStatus("loading");
+    setModelProgress(0);
+    setModelErrorDetail("");
+
+    if (workerRef.current) workerRef.current.terminate();
+    const worker = new Worker("model-worker.js", { type: "module" });
+    workerRef.current = worker;
+
+    worker.onmessage = (e) => {
+      if (cancelled) return;
+      const msg = e.data || {};
+      if (msg.type === "progress") {
+        setModelProgress(msg.progress);
+      } else if (msg.type === "ready") {
+        setModelProgress(100);
+        setModelStatus("ready");
+      } else if (msg.type === "load-error") {
+        setModelErrorDetail("Falha ao carregar o modelo: " + msg.message);
+        setModelStatus("error");
+      } else if (msg.type === "generating-start" || msg.type === "token") {
+        const p = pendingGenRef.current.get(msg.requestId);
+        if (p?.onEvent) p.onEvent(msg);
+      } else if (msg.type === "result" || msg.type === "generate-error") {
+        const resolver = pendingGenRef.current.get(msg.requestId);
+        if (resolver) {
+          pendingGenRef.current.delete(msg.requestId);
+          if (msg.type === "result") resolver.resolve(msg.text);
+          else resolver.reject(new Error(msg.message));
+        }
+      }
+    };
+    worker.onerror = (e) => {
+      if (cancelled) return;
+      setModelErrorDetail("Falha ao carregar o modelo: " + (e.message || "erro desconhecido"));
+      setModelStatus("error");
+    };
+
+    worker.postMessage({ type: "load" });
+
+    return () => {
+      cancelled = true;
+      worker.terminate();
+      if (workerRef.current === worker) workerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let cleanupModel = null;
+    let iAmActive = false;
+    let channel;
+    try { channel = new BroadcastChannel("nexia-model-lock"); } catch (e) { channel = null; }
+
+    if (!channel) {
+      cleanupModel = loadModel();
+      return () => { cancelled = true; if (cleanupModel) cleanupModel(); };
+    }
+
+    channel.onmessage = (e) => {
+      if (cancelled) return;
+      if (e.data === "ping") {
+        if (iAmActive) channel.postMessage("pong");
+      } else if (e.data === "pong") {
+        if (!iAmActive) {
+          clearTimeout(timer);
+          setModelStatus("other-tab");
+        }
+      }
+    };
+
+    channel.postMessage("ping");
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      iAmActive = true;
+      cleanupModel = loadModel();
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      channel.close();
+      if (cleanupModel) cleanupModel();
+    };
+  }, []);
+
+  // Gera uma resposta pedindo pro worker (thread separada), sem travar a UI.
+  const generateInWorker = useCallback((chatMessages, options, onEvent, onRequestId) => {
+    return new Promise((resolve, reject) => {
+      if (!workerRef.current) { reject(new Error("Worker indisponível")); return; }
+      const requestId = uid();
+      pendingGenRef.current.set(requestId, { resolve, reject, onEvent });
+      if (onRequestId) onRequestId(requestId);
+      workerRef.current.postMessage({ type: "generate", requestId, chatMessages, options });
+    });
+  }, []);
+
+  const stopGeneration = useCallback(() => {
+    if (workerRef.current && currentRequestIdRef.current) {
+      workerRef.current.postMessage({ type: "stop", requestId: currentRequestIdRef.current });
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("nexia-conversations");
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && parsed.length) { setConversations(parsed); setActiveId(parsed[0].id); }
+      else createFirstConversation();
+    } catch { createFirstConversation(); }
+    setBooted(true);
+  }, []);
+
+  function createFirstConversation() {
+    const id = uid();
+    setConversations([{ id, title: "Nova conversa", messages: [{ id: uid(), role: "assistant", text: "E aí! Eu sou o Nexia 👋 Rodo local, direto no navegador, sem depender de API de ninguém. Se essa for a primeira vez, aguenta um pouco que ainda tô carregando aí em cima." }] }]);
+    setActiveId(id);
+  }
+
+  useEffect(() => { if (booted) { try { localStorage.setItem("nexia-conversations", JSON.stringify(conversations)); } catch {} } }, [conversations, booted]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [active?.messages?.length, loading]);
+
+  function toggleModoPC() {
+    setPcMode((v) => {
+      const next = !v;
+      try { localStorage.setItem("nexia-pc-mode", next ? "1" : "0"); } catch {}
+      if (next) setSidebarOpen(false);
+      return next;
+    });
+  }
+
+  function newConversation() {
+    const id = uid();
+    setConversations((prev) => [{ id, title: "Nova conversa", messages: [] }, ...prev]);
+    setActiveId(id);
+    setSidebarOpen(false);
+  }
+  function updateActiveMessages(updater) {
+    setConversations((prev) => prev.map((c) => (c.id === activeId ? { ...c, messages: updater(c.messages) } : c)));
+  }
+
+  function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPendingAttachment({ name: file.name, type: file.type, dataUrl: reader.result });
+    reader.readAsDataURL(file);
+    setAttachMenuOpen(false);
+    e.target.value = "";
+  }
+
+  function handleFolderSelected(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setPendingAttachment({ fileNames: files.map((f) => f.name).slice(0, 12) });
+    setAttachMenuOpen(false);
+    e.target.value = "";
+  }
+
+  async function sendMessage() {
+    if ((!input.trim() && !pendingAttachment) || loading || !active) return;
+    if (modelStatus !== "ready" || !workerRef.current) {
+      updateActiveMessages((msgs) => [...msgs, { id: uid(), role: "assistant", text: modelStatus === "error" ? `O modelo local não carregou: ${modelErrorDetail}` : `Ainda tô carregando o modelo local (${modelProgress}%). Espera um pouco e manda de novo.` }]);
+      return;
+    }
+    const userMsg = { id: uid(), role: "user", text: input.trim(), attachment: pendingAttachment };
+    const pendingId = uid();
+    updateActiveMessages(() => [...active.messages, userMsg, { id: pendingId, role: "assistant", text: "", pending: true }]);
+    setConversations((prev) => prev.map((c) => (c.id === activeId && (c.title === "Nova conversa" || !c.title) ? { ...c, title: (input.trim() || "Anexo").slice(0, 32) } : c)));
+    setInput("");
+    setPendingAttachment(null);
+    setLoading(true);
+    try {
+      const chatMessages = [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...FEW_SHOT_EXAMPLES,
+        ...active.messages.concat(userMsg).map((m) => {
+          let text = m.text || "";
+          if (m.attachment?.fileNames) text += `\n[pasta anexada: ${m.attachment.fileNames.join(", ")}]`;
+          if (m.attachment?.dataUrl) text += `\n[imagem anexada: ${m.attachment.name || "foto"} — o modelo local não consegue enxergar imagens ainda, só o nome do arquivo]`;
+          return { role: m.role, content: text || "(vazio)" };
+        }),
+      ];
+      let idleTimer;
+      const armTimer = (ms, reject) => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => reject(new Error("Timeout")), ms);
+      };
+      const text = await new Promise((resolve, reject) => {
+        armTimer(45000, reject); // 45s pra começar a gerar; se não começar, é bug de verdade
+        generateInWorker(
+          chatMessages,
+          { max_new_tokens: 200, do_sample: false, repetition_penalty: 1.3, no_repeat_ngram_size: 3 },
+          (evt) => {
+            if (evt.type === "generating-start") armTimer(60000, reject); // já começou, mais tolerância
+            if (evt.type === "token") {
+              armTimer(60000, reject); // cada token novo reseta — só falha se travar de vez
+              updateActiveMessages((msgs) => msgs.map((m) => (m.id === pendingId ? { ...m, text: (m.text || "") + evt.delta } : m)));
+            }
+          },
+          (requestId) => { currentRequestIdRef.current = requestId; }
+        ).then((finalText) => { clearTimeout(idleTimer); resolve(finalText); })
+          .catch((err) => { clearTimeout(idleTimer); reject(err); });
+      });
+      updateActiveMessages((msgs) => msgs.map((m) => (m.id === pendingId ? { ...m, text: (text || m.text || "").trim() || "Não consegui gerar nada dessa vez, tenta reformular.", pending: false } : m)));
+    } catch (err) {
+      console.error("Erro sendMessage:", err);
+      updateActiveMessages((msgs) => msgs.map((m) => (m.id === pendingId ? { ...m, text: m.text || "Deu erro rodando o modelo local aqui. Tenta de novo.", pending: false } : m)));
+    } finally { setLoading(false); currentRequestIdRef.current = null; }
+  }
+
+  // Troca aqui se a URL do seu backend no Render mudar.
+  const NEXIA_API_BASE = "https://nexia-api-c9r8.onrender.com";
+
+  async function generateApiKey() {
+    setApiKeyModal(true);
+    setKeyCopied("idle");
+    setApiKey("");
+    setApiKeyError("");
+    setApiKeyLoading(true);
+    try {
+      const r = await fetch(NEXIA_API_BASE + "/v1/keys/self", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "app nexia" }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error?.message || "Falha ao gerar chave.");
+      setApiKey(d.key);
+    } catch (e) {
+      setApiKeyError("Não consegui falar com o servidor da API. " + (e?.message || ""));
+    } finally {
+      setApiKeyLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ height: "100dvh", width: "100%", display: "flex", overflow: "hidden", background: theme.bg, color: theme.text, fontFamily: "'Inter', sans-serif" }}>
+      <div style={{ position: pcMode ? "static" : "fixed", zIndex: 30, top: 0, left: 0, height: "100%", width: 288, flexShrink: 0, transition: "transform .2s, width .2s", background: theme.panel, borderRight: `1px solid ${theme.border}`, transform: pcMode || sidebarOpen ? "translateX(0)" : "translateX(-100%)" }}>
+        <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px", marginBottom: 12 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: AMBER, color: "#171008", fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: 14 }}>N</div>
+            <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 600, fontSize: 15 }}>Nexia</span>
+          </div>
+          <button onClick={generateApiKey} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 12, marginBottom: 8, border: `1px solid ${theme.border}`, background: "transparent", color: theme.text, fontSize: 13, cursor: "pointer" }}>
+            <Icon name="key" size={14} color={AMBER_DEEP} /> Gerar API Key
+          </button>
+          <button onClick={newConversation} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 12, marginBottom: 12, background: AMBER, color: "#171008", fontWeight: 600, fontSize: 13, border: "none", cursor: "pointer" }}>
+            <Icon name="messageSquarePlus" size={14} /> Nova conversa
+          </button>
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {conversations.map((c) => (
+              <button key={c.id} onClick={() => { setActiveId(c.id); setSidebarOpen(false); }} className="truncate" style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", borderRadius: 12, marginBottom: 4, background: c.id === activeId ? theme.hover : "transparent", color: c.id === activeId ? theme.text : theme.textMuted, fontSize: 13, border: "none", cursor: "pointer" }}>
+                {c.title || "Nova conversa"}
+              </button>
+            ))}
+          </div>
+          <p style={{ padding: "8px 8px 0", fontSize: 11, color: theme.textFaint, margin: 0 }}>
+            {modelStatus === "ready" ? "IA local · sem limite de mensagens" : modelStatus === "error" ? "IA local · erro ao carregar" : modelStatus === "other-tab" ? "IA local · outra aba já ativa" : `carregando IA local... ${modelProgress}%`}
+          </p>
+        </div>
+      </div>
+      {!pcMode && sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 20 }} />}
+
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: `1px solid ${theme.border}` }}>
+          <button onClick={() => setSidebarOpen((v) => !v)} style={{ background: "transparent", border: "none", color: theme.text, cursor: "pointer", padding: 4, borderRadius: 8 }}>
+            <Icon name="menu" size={18} />
+          </button>
+          <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 500, fontSize: 14, flex: 1 }}>{active?.title || "Nexia"}</span>
+          <button
+            onClick={toggleModoPC}
+            style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999, border: `1px solid ${theme.border}`,
+              background: pcMode ? AMBER : "transparent", color: pcMode ? "#171008" : theme.textMuted, fontSize: 11, cursor: "pointer",
+            }}
+            title="Alternar Modo PC"
+          >
+            <span style={{ fontSize: 13 }}>🖥️</span> Modo PC
+          </button>
+        </div>
+
+        {modelStatus !== "ready" && (
+          <div style={{ padding: "8px 16px", borderBottom: `1px solid ${theme.border}`, background: theme.hover }}>
+            {modelStatus === "error" ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ fontSize: 12, color: RED, wordBreak: "break-word" }}>Erro ao carregar IA local: {modelErrorDetail || "erro desconhecido"}</span>
+                <button onClick={() => loadModel()} style={{ background: AMBER, color: "#171008", border: "none", fontSize: 11, borderRadius: 8, padding: "4px 8px", cursor: "pointer" }}>Tentar de novo</button>
+              </div>
+            ) : modelStatus === "other-tab" ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ fontSize: 12, color: theme.textMuted }}>Já tem outra aba do Nexia aberta rodando a IA. Fecha ela pra abrir aqui (carregar dos dois ao mesmo tempo pode travar o navegador).</span>
+                <button onClick={() => window.location.reload()} style={{ background: AMBER, color: "#171008", border: "none", fontSize: 11, borderRadius: 8, padding: "4px 8px", cursor: "pointer", flexShrink: 0 }}>Recarregar</button>
+              </div>
+            ) : (
+              <>
+                <span style={{ fontSize: 12, color: theme.textMuted }}>Carregando IA local... {modelProgress}% (fica rápido depois que baixar uma vez, mas sempre passa por aqui rapidinho ao abrir)</span>
+                <div style={{ marginTop: 4, borderRadius: 999, overflow: "hidden", height: 4, background: theme.border }}>
+                  <div style={{ height: "100%", width: `${modelProgress}%`, background: AMBER, transition: "width .3s ease" }} />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 0", display: "flex", flexDirection: "column", gap: 12, maxWidth: pcMode ? 760 : "none", width: "100%", margin: "0 auto" }}>
+          {active?.messages?.map((m) => <MessageBubble key={m.id} msg={m} theme={theme} />)}
+        </div>
+
+        {pendingAttachment && (
+          <div style={{ padding: "0 16px 4px" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 12, border: `1px solid ${theme.border}`, background: theme.hover, fontSize: 12 }}>
+              {pendingAttachment.dataUrl ? <><Icon name="image" size={13} /> {pendingAttachment.name}</> : <>📁 {pendingAttachment.fileNames?.length} arquivo(s)</>}
+              <button onClick={() => setPendingAttachment(null)} style={{ background: "transparent", border: "none", color: theme.textMuted, cursor: "pointer" }}>
+                <Icon name="x" size={13} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ padding: "8px 12px 12px 12px", borderTop: `1px solid ${theme.border}`, position: "relative" }}>
+          {attachMenuOpen && (
+            <div style={{ position: "absolute", bottom: "100%", left: 12, marginBottom: 8, display: "flex", gap: 8, padding: 8, borderRadius: 16, border: `1px solid ${theme.border}`, background: theme.panel, boxShadow: "0 10px 30px rgba(0,0,0,0.25)" }}>
+              {[
+                { name: "camera", label: "Câmera", onClick: () => cameraRef.current?.click() },
+                { name: "image", label: "Fotos", onClick: () => photoRef.current?.click() },
+                { name: "folderPlus", label: "Pastas", onClick: () => folderRef.current?.click() },
+              ].map((b, i) => (
+                <button key={i} onClick={b.onClick} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "10px 16px", borderRadius: 12, background: "transparent", border: "none", color: theme.text, fontSize: 11, cursor: "pointer" }}>
+                  <Icon name={b.name} size={20} color={AMBER_DEEP} />
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={handleFileSelected} />
+          <input ref={photoRef} type="file" accept="image/*" hidden onChange={handleFileSelected} />
+          <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple hidden onChange={handleFolderSelected} />
+
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 8, borderRadius: 16, padding: "6px 8px", border: `1px solid ${theme.border}`, background: theme.inputBg }}>
+            <button onClick={() => setAttachMenuOpen((v) => !v)} style={{ background: "transparent", border: "none", color: theme.text, cursor: "pointer", width: 32, height: 32, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all .15s" }}>
+              <Icon name="plus" size={18} style={{ transform: attachMenuOpen ? "rotate(45deg)" : "rotate(0deg)", transition: "transform .2s" }} />
+            </button>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              rows={1}
+              placeholder="Manda a sua ideia..."
+              style={{ flex: 1, resize: "none", background: "transparent", outline: "none", border: "none", color: theme.text, fontSize: 14, maxHeight: 110, padding: "8px 4px", lineHeight: 1.4 }}
+            />
+            <button onClick={loading ? stopGeneration : sendMessage} disabled={!loading && (!input.trim() && !pendingAttachment)} style={{ background: AMBER, color: "#171008", border: "none", cursor: loading ? "pointer" : (!input.trim() && !pendingAttachment) ? "default" : "pointer", opacity: !loading && (!input.trim() && !pendingAttachment) ? 0.35 : 1, width: 36, height: 36, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all .15s ease", boxShadow: loading ? `0 0 12px rgba(251, 191, 36, 0.3)` : "none" }} title={loading ? "Parar a IA" : "Enviar"}>
+              {loading ? <div style={{ width: 12, height: 12, borderRadius: 3, background: "#171008" }} /> : <Icon name="send" size={17} />}
+            </button>
+          </div>
+        </div>
+        {loading && <p style={{ fontSize: 11, color: theme.textMuted, textAlign: "center", marginTop: 6 }}>Gerando... toca no quadrado pra parar</p>}
+      </div>
+
+      {apiKeyModal && (
+        <div onClick={() => setApiKeyModal(false)} style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, background: "rgba(0,0,0,0.6)", zIndex: 40 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 380, borderRadius: 16, padding: 20, border: `1px solid ${theme.border}`, background: theme.panel }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <Icon name="sparkles" size={16} color={AMBER_DEEP} />
+              <h3 style={{ fontFamily: DISPLAY_FONT, fontWeight: 600, fontSize: 15, margin: 0 }}>Sua API Key</h3>
+            </div>
+            <p style={{ fontSize: 12.5, color: theme.textMuted, marginBottom: 12 }}>Essa chave dá acesso à API do Nexia rodando no servidor (não no seu aparelho). Cada chave tem limite de 5 horas de geração por dia.</p>
+            {apiKeyLoading ? (
+              <p style={{ fontSize: 12.5, color: theme.textMuted, display: "flex", alignItems: "center", gap: 8 }}><Icon name="loader" spin size={14} /> Gerando chave no servidor...</p>
+            ) : apiKeyError ? (
+              <p style={{ fontSize: 12.5, color: "#f88" }}>{apiKeyError}</p>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderRadius: 12, border: `1px solid ${theme.border}`, background: theme.hover }}>
+                  <input ref={apiKeyInputRef} readOnly value={apiKey} onFocus={(e) => e.target.select()} onClick={(e) => e.target.select()} style={{ background: "transparent", border: "none", outline: "none", color: theme.text, fontFamily: MONO_FONT, fontSize: 12.5, width: "100%" }} />
+                  <button onClick={() => { copyText(apiKey).then(() => { setKeyCopied("copied"); setTimeout(() => setKeyCopied("idle"), 1400); }).catch(() => { apiKeyInputRef.current?.select(); setKeyCopied("manual"); setTimeout(() => setKeyCopied("idle"), 2600); }); }} style={{ background: "transparent", border: "none", color: keyCopied === "copied" ? EMERALD : theme.text, cursor: "pointer" }}>
+                    <Icon name={keyCopied === "copied" ? "check" : "copy"} size={15} />
+                  </button>
+                </div>
+                {keyCopied === "manual" && <p style={{ fontSize: 11, color: AMBER_DEEP, marginTop: 6 }}>Selecionei o texto — toque e segure nele e escolha "Copiar".</p>}
+              </>
+            )}
+            <button onClick={() => setApiKeyModal(false)} style={{ marginTop: 16, width: "100%", padding: "8px 0", borderRadius: 12, background: AMBER, color: "#171008", fontWeight: 600, fontSize: 13, border: "none", cursor: "pointer" }}>Fechar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+<script>
+  window.addEventListener("DOMContentLoaded", function () {
+    try {
+      var source = document.getElementById("app-source").textContent;
+      var output = Babel.transform(source, { presets: ["react"] }).code;
+      var script = document.createElement("script");
+      script.textContent = output;
+      document.body.appendChild(script);
+    } catch (e) {
+      showFatalError("Erro ao compilar o app: " + (e && e.message ? e.message : e));
+    }
+  });
+</script>
+</body>
+</html>
